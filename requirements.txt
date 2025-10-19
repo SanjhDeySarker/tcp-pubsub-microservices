@@ -1,0 +1,11 @@
+# Core dependencies (Python built-ins like socket/threading need no installation)
+# These packages improve code readability, logging, and configuration handling.
+
+# Environment variables (optional for Docker or configs)
+python-dotenv>=1.0.0
+
+# Better colored terminal logs
+colorama>=0.4.6
+
+# Optional: Advanced logging utility (can replace print/log)
+loguru>=0.7.2
