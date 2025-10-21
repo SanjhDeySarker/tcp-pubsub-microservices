@@ -1,4 +1,7 @@
-import socket, threading, json
+import socket
+import threading
+from .protocol import encode, decode, REGISTER, SUBSCRIBE, PUBLISH, MESSAGE
+from .utils import log
 
 HOST = "127.0.0.1"
 PORT = 9000
@@ -7,68 +10,78 @@ subscriptions = {}  # topic -> list of sockets
 services = {}       # service_name -> socket
 
 def handle_client(conn, addr):
-    print(f"[CONNECTED] {addr}")
     service_name = None
+    log("CONNECT", f"{addr} connected.")
+
     try:
         while True:
             data = conn.recv(4096)
-            if not data: break
-            msg = json.loads(data.decode())
+            if not data:
+                break
+            msg = decode(data)
             action = msg.get("action")
 
-            if action == "register":
+            # Register service
+            if action == REGISTER:
                 service_name = msg.get("service")
                 services[service_name] = conn
-                print(f"[REGISTERED] {service_name} @ {addr}")
-                conn.send(json.dumps({"status":"ok"}).encode())
+                log("REGISTER", f"{service_name} registered @ {addr}")
+                conn.send(encode({"status": "ok", "message": f"Registered as {service_name}"}))
 
-            elif action == "subscribe":
+            # Subscribe to topic
+            elif action == SUBSCRIBE:
                 topic = msg.get("topic")
                 subscriptions.setdefault(topic, []).append(conn)
-                print(f"[SUBSCRIBED] {service_name or addr} -> {topic}")
+                log("SUBSCRIBE", f"{service_name} subscribed to '{topic}'")
 
-            elif action == "publish":
+            # Publish to topic
+            elif action == PUBLISH:
                 topic = msg.get("topic")
                 message = msg.get("message")
-                print(f"[PUBLISH] {service_name} -> {topic}: {message}")
-                for sub in subscriptions.get(topic, []):
-                    try:
-                        sub.send(json.dumps({
-                            "type":"topic_message",
-                            "topic": topic,
-                            "from": service_name,
-                            "message": message
-                        }).encode())
-                    except: pass
+                log("PUBLISH", f"{service_name} -> {topic}: {message}")
 
-            elif action == "message":
-                to_service = msg.get("to")
-                message = msg.get("message")
-                print(f"[MESSAGE] {service_name} -> {to_service}: {message}")
-                target_conn = services.get(to_service)
-                if target_conn:
-                    target_conn.send(json.dumps({
-                        "type":"direct_message",
+                for subscriber in subscriptions.get(topic, []):
+                    subscriber.send(encode({
+                        "type": "topic_message",
+                        "topic": topic,
                         "from": service_name,
                         "message": message
-                    }).encode())
-                else:
-                    conn.send(json.dumps({"type":"error","message":f"{to_service} not found"}).encode())
-    except Exception as e:
-        print(f"[ERROR] {addr}: {e}")
-    finally:
-        if service_name in services: del services[service_name]
-        conn.close()
-        print(f"[DISCONNECTED] {addr}")
+                    }))
 
-def start_server():
+            # Direct message
+            elif action == MESSAGE:
+                to_service = msg.get("to")
+                message = msg.get("message")
+                log("MESSAGE", f"{service_name} -> {to_service}: {message}")
+
+                if to_service in services:
+                    target = services[to_service]
+                    target.send(encode({
+                        "type": "direct_message",
+                        "from": service_name,
+                        "message": message
+                    }))
+                else:
+                    conn.send(encode({
+                        "type": "error",
+                        "message": f"Service '{to_service}' not found"
+                    }))
+
+    except Exception as e:
+        log("ERROR", f"{service_name or addr}: {e}")
+    finally:
+        if service_name and service_name in services:
+            del services[service_name]
+        conn.close()
+        log("DISCONNECT", f"{addr} disconnected.")
+
+
+def start_broker():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind((HOST, PORT))
     server.listen()
-    print(f"[BROKER RUNNING] {HOST}:{PORT}")
+    log("BROKER", f"Running on {HOST}:{PORT}")
+
     while True:
         conn, addr = server.accept()
         threading.Thread(target=handle_client, args=(conn, addr), daemon=True).start()
-
-if __name__ == "__main__":
-    start_server()
