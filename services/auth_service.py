@@ -1,13 +1,14 @@
 from pubsub.client import PubSubClient
 import time
 
-def on_user_event(msg):
-    print(f"[AUTH SERVICE RECEIVED] {msg}")
+def on_user_created(message, sender):
+    print(f"[EVENT] New user event from {sender}: {message}")
 
 client = PubSubClient("auth-service")
 
-client.subscribe("user_created", on_user_event)
+# Subscribe to topic with callback
+client.subscribe("user_created", on_user_created)
 
-print("✅ auth-service running. Press Ctrl+C to exit.")
+print("✅ auth-service running. Listening for messages...")
 while True:
     time.sleep(1)
