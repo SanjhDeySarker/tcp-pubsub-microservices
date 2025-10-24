@@ -1,15 +1,21 @@
 import json
 
+DELIMITER = b"\n"  # newline separates JSON messages
+
+
 def encode(data: dict) -> bytes:
-    """Encode Python dict to JSON bytes."""
-    return json.dumps(data).encode()
+    """Convert dict -> JSON bytes with delimiter."""
+    return (json.dumps(data) + "\n").encode()
 
-def decode(data: bytes) -> dict:
-    """Decode bytes to Python dict."""
-    return json.loads(data.decode())
 
-# Define common message actions
-REGISTER = "register"
-SUBSCRIBE = "subscribe"
-PUBLISH = "publish"
-MESSAGE = "message"
+def decode_stream(buffer: bytes):
+    """Split buffer into multiple JSON messages."""
+    messages = []
+    parts = buffer.split(DELIMITER)
+    for part in parts[:-1]:  # all complete JSONs
+        if part.strip():
+            try:
+                messages.append(json.loads(part))
+            except json.JSONDecodeError:
+                pass
+    return messages, parts[-1]  # return leftover
