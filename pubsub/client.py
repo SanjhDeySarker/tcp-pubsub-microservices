@@ -2,17 +2,16 @@ import socket
 import json
 import threading
 import time
-
 from .protocol import encode, decode
 
 
 class PubSubClient:
     """
     A TCP-based Pub/Sub + Direct Messaging client.
-    Handles:
+    Supports:
       - Service registration
-      - Topic subscription
-      - Message publishing
+      - Topic subscriptions (with optional callbacks)
+      - Publishing messages
       - Direct service-to-service messaging
     """
 
@@ -22,20 +21,21 @@ class PubSubClient:
         self.port = port
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-        # Try connecting to the broker with retries
-        self.connect_with_retry()
+        # Store callbacks for each topic
+        self.callbacks = {}
 
-        # Register service with broker
+        # Connect and register
+        self.connect_with_retry()
         self.register()
 
-        # Start background thread to listen for messages
+        # Start listener thread
         threading.Thread(target=self.listen, daemon=True).start()
 
     # ---------------------------------------------------------------------
     # Connection Helpers
     # ---------------------------------------------------------------------
     def connect_with_retry(self, retries=5, delay=1):
-        """Try to connect to the broker with a few retries."""
+        """Try to connect to the broker with retry logic."""
         for attempt in range(1, retries + 1):
             try:
                 self.sock.connect((self.host, self.port))
@@ -50,17 +50,19 @@ class PubSubClient:
     # Registration
     # ---------------------------------------------------------------------
     def register(self):
-        """Register the current service name with the broker."""
+        """Register this service name with the broker."""
         payload = {"action": "register", "service": self.service_name}
         self.sock.send(encode(payload))
+        print(f"[REGISTERED] {self.service_name}")
 
     # ---------------------------------------------------------------------
     # Topic Operations
     # ---------------------------------------------------------------------
-    def subscribe(self, topic):
-        """Subscribe to a topic."""
+    def subscribe(self, topic, callback=None):
+        """Subscribe to a topic and optionally attach a callback."""
         payload = {"action": "subscribe", "topic": topic}
         self.sock.send(encode(payload))
+        self.callbacks[topic] = callback
         print(f"[SUBSCRIBED] to topic '{topic}'")
 
     def publish(self, topic, message):
@@ -111,11 +113,21 @@ class PubSubClient:
         msg_type = msg.get("type")
 
         if msg_type == "topic_message":
-            print(f"[TOPIC:{msg['topic']}] {msg['from']} -> {msg['message']}")
+            topic = msg["topic"]
+            sender = msg["from"]
+            message = msg["message"]
+
+            if topic in self.callbacks and self.callbacks[topic]:
+                try:
+                    self.callbacks[topic](message, sender)
+                except Exception as e:
+                    print(f"[ERROR] Callback for topic '{topic}' failed: {e}")
+            else:
+                print(f"[TOPIC:{topic}] {sender} -> {message}")
+
         elif msg_type == "direct_message":
             print(f"[DM] {msg['from']} -> {msg['message']}")
         elif msg_type == "error":
             print(f"[ERROR] {msg['message']}")
         else:
             print(f"[INFO] {msg}")
-
