@@ -1,21 +1,14 @@
 from pubsub.client import PubSubClient
 import time
 
-if __name__ == "__main__":
-    client = PubSubClient("user-service")
+client = PubSubClient("user-service")
 
-    time.sleep(1)  # wait for registration
+time.sleep(1)
+client.publish("user_created", {"user_id": 50, "name": "Alice"})
+client.publish("user_created", {"user_id": 150, "name": "Bob"})
 
-    # Publish an event
-    client.publish("user_created", "User 101 created!")
-
-    # Send direct message to auth-service
-    time.sleep(1)
-    client.send_message("auth-service", "Ping from user-service!")
-
-    print("✅ user-service running. Press Ctrl+C to exit.")
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        client.close()
+time.sleep(1)
+client.send_message("auth-service", "Ping from user-service!")
+print("✅ user-service running. Press Ctrl+C to exit.")
+while True:
+    pass
