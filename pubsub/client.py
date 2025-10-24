@@ -1,133 +1,131 @@
 import socket
-import json
 import threading
-import time
-from .protocol import encode, decode
+import json
+from .protocol import encode, decode_stream
 
 
 class PubSubClient:
-    """
-    A TCP-based Pub/Sub + Direct Messaging client.
-    Supports:
-      - Service registration
-      - Topic subscriptions (with optional callbacks)
-      - Publishing messages
-      - Direct service-to-service messaging
-    """
-
-    def __init__(self, service_name, host="127.0.0.1", port=9000):
+    def __init__(self, service_name: str, host: str = "127.0.0.1", port: int = 9000):
         self.service_name = service_name
         self.host = host
         self.port = port
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock = None
+        self.buffer = b""
+        self.callbacks = {}  # topic -> callback
+        self.running = False
 
-        # Store callbacks for each topic
-        self.callbacks = {}
-
-        # Connect and register
-        self.connect_with_retry()
-        self.register()
+        self._connect()
+        self._register()
 
         # Start listener thread
-        threading.Thread(target=self.listen, daemon=True).start()
+        listener = threading.Thread(target=self._listen, daemon=True)
+        listener.start()
 
-    # ---------------------------------------------------------------------
-    # Connection Helpers
-    # ---------------------------------------------------------------------
-    def connect_with_retry(self, retries=5, delay=1):
-        """Try to connect to the broker with retry logic."""
-        for attempt in range(1, retries + 1):
-            try:
-                self.sock.connect((self.host, self.port))
-                print(f"[CONNECTED] to broker at {self.host}:{self.port}")
-                return
-            except ConnectionRefusedError:
-                print(f"[WAITING] Broker not ready (attempt {attempt}/{retries})...")
-                time.sleep(delay)
-        raise ConnectionError("Could not connect to broker after several attempts")
+    # ----------------------------------------------------------
+    # Connection + Registration
+    # ----------------------------------------------------------
+    def _connect(self):
+        """Connect to the broker."""
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.connect((self.host, self.port))
+        print(f"[CONNECTED] to broker at {self.host}:{self.port}")
 
-    # ---------------------------------------------------------------------
-    # Registration
-    # ---------------------------------------------------------------------
-    def register(self):
-        """Register this service name with the broker."""
+    def _register(self):
+        """Register the service with the broker."""
         payload = {"action": "register", "service": self.service_name}
         self.sock.send(encode(payload))
         print(f"[REGISTERED] {self.service_name}")
 
-    # ---------------------------------------------------------------------
-    # Topic Operations
-    # ---------------------------------------------------------------------
-    def subscribe(self, topic, callback=None):
+    # ----------------------------------------------------------
+    # Core Messaging
+    # ----------------------------------------------------------
+    def subscribe(self, topic: str, callback=None):
         """Subscribe to a topic and optionally attach a callback."""
         payload = {"action": "subscribe", "topic": topic}
         self.sock.send(encode(payload))
-        self.callbacks[topic] = callback
         print(f"[SUBSCRIBED] to topic '{topic}'")
 
-    def publish(self, topic, message):
+        if callback:
+            self.callbacks[topic] = callback
+
+    def publish(self, topic: str, message):
         """Publish a message to a topic."""
         payload = {"action": "publish", "topic": topic, "message": message}
         self.sock.send(encode(payload))
         print(f"[PUBLISHED] {topic} -> {message}")
 
-    # ---------------------------------------------------------------------
-    # Direct Messaging
-    # ---------------------------------------------------------------------
-    def send_message(self, to_service, message):
-        """Send a direct message to another registered service."""
+    def send_message(self, to_service: str, message):
+        """Send direct message to another service."""
         payload = {"action": "message", "to": to_service, "message": message}
         try:
             self.sock.send(encode(payload))
             print(f"[SENT] Direct message to {to_service}: {message}")
-        except (ConnectionResetError, BrokenPipeError):
-            print("[ERROR] Connection lost while sending direct message.")
+        except Exception as e:
+            print(f"[ERROR] Failed to send message to {to_service}: {e}")
 
-    # ---------------------------------------------------------------------
-    # Listener Loop
-    # ---------------------------------------------------------------------
-    def listen(self):
-        """Listen for incoming messages from the broker."""
-        while True:
-            try:
+    # ----------------------------------------------------------
+    # Internal Listener
+    # ----------------------------------------------------------
+    def _listen(self):
+        """Background thread: listen for incoming messages."""
+        self.running = True
+        try:
+            while self.running:
                 data = self.sock.recv(4096)
                 if not data:
                     print("[DISCONNECTED] Broker closed connection.")
                     break
 
-                msg = decode(data)
-                self.handle_message(msg)
+                self.buffer += data
+                messages, self.buffer = decode_stream(self.buffer)
 
-            except (ConnectionResetError, ConnectionAbortedError):
-                print("[ERROR] Connection aborted by the broker.")
-                break
-            except Exception as e:
-                print(f"[ERROR] Unexpected: {e}")
-                break
+                for msg in messages:
+                    self._handle_message(msg)
+        except ConnectionResetError:
+            print("[ERROR] Connection lost.")
+        except Exception as e:
+            print(f"[ERROR] Listener failed: {e}")
+        finally:
+            self.sock.close()
 
-    # ---------------------------------------------------------------------
+    # ----------------------------------------------------------
     # Message Handling
-    # ---------------------------------------------------------------------
-    def handle_message(self, msg):
-        """Handle incoming messages from the broker."""
+    # ----------------------------------------------------------
+    def _handle_message(self, msg: dict):
         msg_type = msg.get("type")
 
-        if msg_type == "topic_message":
-            topic = msg["topic"]
-            sender = msg["from"]
-            message = msg["message"]
+        # Direct service-to-service message
+        if msg_type == "direct_message":
+            sender = msg.get("from")
+            message = msg.get("message")
+            print(f"[DM] {sender} -> {message}")
 
-            if topic in self.callbacks and self.callbacks[topic]:
+        # Topic-based message
+        elif msg_type == "topic_message":
+            topic = msg.get("topic")
+            sender = msg.get("from")
+            message = msg.get("message")
+            print(f"[TOPIC:{topic}] {sender} -> {message}")
+
+            callback = self.callbacks.get(topic)
+            if callback:
                 try:
-                    self.callbacks[topic](message, sender)
+                    callback(topic, message)
                 except Exception as e:
                     print(f"[ERROR] Callback for topic '{topic}' failed: {e}")
-            else:
-                print(f"[TOPIC:{topic}] {sender} -> {message}")
 
-        elif msg_type == "direct_message":
-            print(f"[DM] {msg['from']} -> {msg['message']}")
+        # Error or info
         elif msg_type == "error":
-            print(f"[ERROR] {msg['message']}")
+            print(f"[ERROR] {msg.get('message')}")
         else:
             print(f"[INFO] {msg}")
+
+    # ----------------------------------------------------------
+    # Cleanup
+    # ----------------------------------------------------------
+    def close(self):
+        """Close the connection cleanly."""
+        self.running = False
+        if self.sock:
+            self.sock.close()
+        print("[CLOSED] Connection closed.")
