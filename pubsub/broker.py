@@ -1,11 +1,12 @@
 # pubsub/broker.py
 import socket
 import threading
+import os
 from .protocol import encode, decode_stream
 from datetime import datetime
 
-HOST = "127.0.0.1"
-PORT = 9000
+HOST = os.getenv("BROKER_HOST", "0.0.0.0")
+PORT = int(os.getenv("BROKER_PORT", "9000"))
 
 # service_name -> conn
 services = {}

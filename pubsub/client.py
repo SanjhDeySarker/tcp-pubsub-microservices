@@ -24,7 +24,7 @@ class PubSubClient:
         payload = {"action": "register", "service": self.service_name}
         self.sock.send(encode(payload))
 
-    # ✳️ Subscribe with optional filter
+    #  Subscribe with optional filter
     def subscribe(self, topic: str, callback: Optional[Callable] = None, filter_func: Optional[Callable] = None):
         self.callbacks[topic] = {"callback": callback, "filter": filter_func}
         payload = {"action": "subscribe", "topic": topic}
@@ -71,7 +71,7 @@ class PubSubClient:
                 callback = cb_info.get("callback")
                 filter_func = cb_info.get("filter")
 
-                # ✳️ Check filter before invoking callback
+                #  Check filter before invoking callback
                 if filter_func:
                     try:
                         if not filter_func(message):
